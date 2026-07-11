@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 )
 
@@ -629,6 +630,43 @@ func TestCreateCNAMERecord(t *testing.T) {
 		t.Errorf("unexpected record response: %+v", record)
 	}
 }
+
+func TestDeleteARecord(t *testing.T) {
+	mux, client := setup(t)
+
+	var gotQuery url.Values
+	mux.HandleFunc("GET /api/zones/records/delete", func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"ok"}`)
+	})
+
+	ipAddress := "1.2.3.4"
+	_, err := client.RecordsAPI.DeleteRecord(&RecordRequest{
+		Domain:    "example.com",
+		Type:      "A",
+		IPAddress: &ipAddress,
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	// The delete endpoint must identify the record by "domain" (not "name"),
+	// "type", and the type-specific data field.
+	if got := gotQuery.Get("domain"); got != "example.com" {
+		t.Errorf("domain param: wanted %q, got %q", "example.com", got)
+	}
+	if got := gotQuery.Get("type"); got != "A" {
+		t.Errorf("type param: wanted %q, got %q", "A", got)
+	}
+	if got := gotQuery.Get("ipAddress"); got != "1.2.3.4" {
+		t.Errorf("ipAddress param: wanted %q, got %q", "1.2.3.4", got)
+	}
+	if got := gotQuery.Get("name"); got != "" {
+		t.Errorf("unexpected name param: %q", got)
+	}
+}
+
 func TestListZones(t *testing.T) {
 	mux, client := setup(t)
 	mux.HandleFunc("GET /api/zones/list", func(w http.ResponseWriter, r *http.Request) {
@@ -758,13 +796,60 @@ func TestListZones(t *testing.T) {
 func TestLogin(t *testing.T) {
 	_, client := setup(t)
 
-	token, _, err := client.UsersAPI.Login("admin", "admin")
+	loginRequest := &LoginRequest{
+		User:        "admin",
+		Pass:        "admin",
+		IncludeInfo: false,
+	}
+
+	token, _, err := client.UsersAPI.Login(loginRequest)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
 	if token != "932b2a3495852c15af01598f62563ae534460388b6a370bfbbb8bb6094b698e9" {
 		t.Errorf("unexpected record response: %+v", token)
+	}
+}
+
+func TestTokenCachingAndReauth(t *testing.T) {
+	mux := http.NewServeMux()
+
+	var loginCount int
+	mux.HandleFunc("GET /api/user/login", func(w http.ResponseWriter, r *http.Request) {
+		loginCount++
+		fmt.Fprintf(w, `{"token":"tok%d","status":"ok"}`, loginCount)
+	})
+
+	var attempts int
+	mux.HandleFunc("GET /api/zones/list", func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			// The first cached token is treated as stale.
+			fmt.Fprint(w, `{"status":"invalid-token"}`)
+			return
+		}
+		fmt.Fprint(w, `{"response":{"zones":[]},"status":"ok"}`)
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	client := NewAPIClient(&Configuration{BaseURL: server.URL, User: "admin", Pass: "admin"})
+
+	// First call logs in, hits invalid-token, re-logs in and retries.
+	if _, _, err := client.ZonesAPI.ListZones(); err != nil {
+		t.Fatalf("first ListZones: %v", err)
+	}
+	if loginCount != 2 {
+		t.Errorf("expected 2 logins after re-auth, got %d", loginCount)
+	}
+
+	// Second call reuses the cached token, so no new login occurs.
+	if _, _, err := client.ZonesAPI.ListZones(); err != nil {
+		t.Fatalf("second ListZones: %v", err)
+	}
+	if loginCount != 2 {
+		t.Errorf("expected cached token reuse (still 2 logins), got %d", loginCount)
 	}
 }
 

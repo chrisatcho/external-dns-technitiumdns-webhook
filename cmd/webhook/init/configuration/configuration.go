@@ -25,7 +25,19 @@ type Config struct {
 func Init() Config {
 	cfg := Config{}
 	if err := env.Parse(&cfg); err != nil {
-		log.Fatalf("Error reading configuration from environment: %v", err)
+		log.Fatalf("error reading configuration from environment: %v", err)
 	}
+
+	// Validate configuration
+	if cfg.ServerPort < 1 || cfg.ServerPort > 65535 {
+		log.Fatalf("invalid SERVER_PORT: %d (must be between 1 and 65535)", cfg.ServerPort)
+	}
+	if cfg.MetricsPort < 1 || cfg.MetricsPort > 65535 {
+		log.Fatalf("invalid METRICS_PORT: %d (must be between 1 and 65535)", cfg.MetricsPort)
+	}
+
+	log.Infof("configuration loaded: host=%s, port=%d, metricsPort=%d",
+		cfg.ServerHost, cfg.ServerPort, cfg.MetricsPort)
+
 	return cfg
 }

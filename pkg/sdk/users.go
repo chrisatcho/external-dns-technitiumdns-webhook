@@ -4,10 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 )
 
 type UsersAPIService service
+
+type LoginRequest struct {
+	User        string `json:"user"`
+	Pass        string `json:"pass"`
+	IncludeInfo bool   `json:"includeInfo"`
+}
 
 type LoginResponse struct {
 	DisplayName       *string `json:"displayName,omitempty"`
@@ -19,7 +24,7 @@ type LoginResponse struct {
 	InnerErrorMessage string  `json:"innerErrorMessage,omitempty"`
 }
 
-func (a *UsersAPIService) Login(user, pass string) (string, *http.Response, error) {
+func (a *UsersAPIService) Login(r *LoginRequest) (string, *http.Response, error) {
 	reqURL := a.client.cfg.BaseURL + "/api/user/login"
 
 	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
@@ -27,10 +32,7 @@ func (a *UsersAPIService) Login(user, pass string) (string, *http.Response, erro
 		return "", nil, fmt.Errorf("new Login request: %w", err)
 	}
 
-	q := url.Values{}
-	q.Set("user", user)
-	q.Set("pass", pass)
-	q.Set("includeInfo", "false")
+	q := structToQuery(r)
 	req.URL.RawQuery = q.Encode()
 
 	res, err := a.client.cfg.HTTPClient.Do(req)
@@ -47,6 +49,10 @@ func (a *UsersAPIService) Login(user, pass string) (string, *http.Response, erro
 
 	if body.Status != "ok" {
 		return "", nil, fmt.Errorf("response status not 'ok': %v, %v", body.Status, body.ErrorMessage)
+	}
+
+	if body.Token == nil {
+		return "", nil, fmt.Errorf("login response missing token")
 	}
 
 	return *body.Token, nil, nil

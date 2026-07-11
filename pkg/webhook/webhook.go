@@ -14,17 +14,19 @@ import (
 )
 
 const (
-	mediaTypeFormat        = "application/external.dns.webhook+json;"
-	contentTypeHeader      = "Content-Type"
-	contentTypePlaintext   = "text/plain"
-	acceptHeader           = "Accept"
-	varyHeader             = "Vary"
-	supportedMediaVersions = "1"
-	healthPath             = "/health"
-	logFieldRequestPath    = "requestPath"
-	logFieldRequestMethod  = "requestMethod"
-	logFieldError          = "error"
+	mediaTypeFormat       = "application/external.dns.webhook+json;"
+	contentTypeHeader     = "Content-Type"
+	contentTypePlaintext  = "text/plain"
+	acceptHeader          = "Accept"
+	varyHeader            = "Vary"
+	healthPath            = "/health"
+	logFieldRequestPath   = "requestPath"
+	logFieldRequestMethod = "requestMethod"
+	logFieldError         = "error"
 )
+
+// supportedMediaVersions lists the webhook API versions this provider speaks.
+var supportedMediaVersions = []string{"1"}
 
 var (
 	errClientMustProvideContentType  = errors.New("client must provide a content type")
@@ -44,20 +46,15 @@ func (m mediaType) Is(headerValue string) bool {
 }
 
 func checkAndGetMediaTypeHeaderValue(value string) (string, error) {
-	for _, v := range strings.Split(supportedMediaVersions, ",") {
+	supported := make([]string, len(supportedMediaVersions))
+	for i, v := range supportedMediaVersions {
 		if mediaTypeVersion(v).Is(value) {
 			return v, nil
 		}
+		supported[i] = string(mediaTypeVersion(v))
 	}
-	supportedMediaTypesString := ""
-	for i, v := range strings.Split(supportedMediaVersions, ",") {
-		sep := ""
-		if i < len(supportedMediaVersions)-1 {
-			sep = ", "
-		}
-		supportedMediaTypesString += string(mediaTypeVersion(v)) + sep
-	}
-	return "", fmt.Errorf("unsupported media type version: '%s'. Supported media types are: '%s'", value, supportedMediaTypesString)
+	return "", fmt.Errorf("unsupported media type version: '%s'. Supported media types are: '%s'",
+		value, strings.Join(supported, ", "))
 }
 
 // Webhook for external dns provider
@@ -107,7 +104,7 @@ func (p *Webhook) headerCheck(isContentType bool, w http.ResponseWriter, r *http
 		}
 		_, writeErr := fmt.Fprint(w, err.Error())
 		if writeErr != nil {
-			requestLog(r).WithField(logFieldError, writeErr).Fatalf("error writing error message to response writer")
+			requestLog(r).WithField(logFieldError, writeErr).Error("error writing error message to response writer")
 		}
 		return err
 	}
@@ -124,7 +121,7 @@ func (p *Webhook) headerCheck(isContentType bool, w http.ResponseWriter, r *http
 		err := fmt.Errorf(msg+": %s", err.Error())
 		_, writeErr := fmt.Fprint(w, err.Error())
 		if writeErr != nil {
-			requestLog(r).WithField(logFieldError, writeErr).Fatalf("error writing error message to response writer")
+			requestLog(r).WithField(logFieldError, writeErr).Error("error writing error message to response writer")
 		}
 		return err
 	}
@@ -169,9 +166,9 @@ func (p *Webhook) ApplyChanges(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		errMsg := fmt.Sprintf("error decoding changes: %s", err.Error())
 		if _, writeError := fmt.Fprint(w, errMsg); writeError != nil {
-			requestLog(r).WithField(logFieldError, writeError).Fatalf("error writing error message to response writer")
+			requestLog(r).WithField(logFieldError, writeError).Error("error writing error message to response writer")
 		}
-		requestLog(r).WithField(logFieldError, err).Info(errMsg)
+		requestLog(r).WithField(logFieldError, err).Error(errMsg)
 		return
 	}
 	requestLog(r).Debugf("requesting apply changes, create: %d , updateOld: %d, updateNew: %d, delete: %d",
@@ -179,6 +176,11 @@ func (p *Webhook) ApplyChanges(w http.ResponseWriter, r *http.Request) {
 	if err := p.provider.ApplyChanges(ctx, &changes); err != nil {
 		w.Header().Set(contentTypeHeader, contentTypePlaintext)
 		w.WriteHeader(http.StatusInternalServerError)
+		errMsg := fmt.Sprintf("error applying changes: %s", err.Error())
+		if _, writeError := fmt.Fprint(w, errMsg); writeError != nil {
+			requestLog(r).WithField(logFieldError, writeError).Error("error writing error message to response writer")
+		}
+		requestLog(r).WithField(logFieldError, err).Error(errMsg)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -187,11 +189,11 @@ func (p *Webhook) ApplyChanges(w http.ResponseWriter, r *http.Request) {
 // AdjustEndpoints handles the post request for adjusting endpoints
 func (p *Webhook) AdjustEndpoints(w http.ResponseWriter, r *http.Request) {
 	if err := p.contentTypeHeaderCheck(w, r); err != nil {
-		log.Errorf("content type header check failed, request method: %s, request path: %s", r.Method, r.URL.Path)
+		requestLog(r).WithField(logFieldError, err).Error("content type header check failed")
 		return
 	}
 	if err := p.acceptHeaderCheck(w, r); err != nil {
-		log.Errorf("accept header check failed, request method: %s, request path: %s", r.Method, r.URL.Path)
+		requestLog(r).WithField(logFieldError, err).Error("accept header check failed")
 		return
 	}
 
@@ -200,25 +202,30 @@ func (p *Webhook) AdjustEndpoints(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(contentTypeHeader, contentTypePlaintext)
 		w.WriteHeader(http.StatusBadRequest)
 		errMessage := fmt.Sprintf("failed to decode request body: %v", err)
-		log.Infof(errMessage+" , request method: %s, request path: %s", r.Method, r.URL.Path)
+		requestLog(r).WithField(logFieldError, err).Error(errMessage)
 		if _, writeError := fmt.Fprint(w, errMessage); writeError != nil {
-			requestLog(r).WithField(logFieldError, writeError).Fatalf("error writing error message to response writer")
+			requestLog(r).WithField(logFieldError, writeError).Error("error writing error message to response writer")
 		}
 		return
 	}
-	log.Debugf("requesting adjust endpoints count: %d, %v", len(pve), pve)
+	requestLog(r).Debugf("requesting adjust endpoints count: %d", len(pve))
 	pve, err := p.provider.AdjustEndpoints(pve)
 	if err != nil {
-		log.Errorf("Failed to call adjust endpoints: %v", err)
+		requestLog(r).WithField(logFieldError, err).Error("failed to call adjust endpoints")
 		w.Header().Set(contentTypeHeader, contentTypePlaintext)
 		w.WriteHeader(http.StatusInternalServerError)
+		errMessage := fmt.Sprintf("failed to adjust endpoints: %v", err)
+		if _, writeError := fmt.Fprint(w, errMessage); writeError != nil {
+			requestLog(r).WithField(logFieldError, writeError).Error("error writing error message to response writer")
+		}
+		return
 	}
 	out, _ := json.Marshal(&pve)
-	log.Debugf("return adjust endpoints response, resultEndpointCount: %d", len(pve))
+	requestLog(r).Debugf("return adjust endpoints response, resultEndpointCount: %d", len(pve))
 	w.Header().Set(contentTypeHeader, string(mediaTypeVersion1))
 	w.Header().Set(varyHeader, contentTypeHeader)
 	if _, writeError := fmt.Fprint(w, string(out)); writeError != nil {
-		requestLog(r).WithField(logFieldError, writeError).Fatalf("error writing response")
+		requestLog(r).WithField(logFieldError, writeError).Error("error writing response")
 	}
 }
 
@@ -229,7 +236,7 @@ func (p *Webhook) Negotiate(w http.ResponseWriter, r *http.Request) {
 	}
 	b, err := json.Marshal(p.provider.GetDomainFilter())
 	if err != nil {
-		log.Errorf("failed to marshal domain filter, request method: %s, request path: %s", r.Method, r.URL.Path)
+		requestLog(r).WithField(logFieldError, err).Error("failed to marshal domain filter")
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}

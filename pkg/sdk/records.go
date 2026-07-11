@@ -151,28 +151,14 @@ func (a *RecordsAPIService) CreateRecord(r *RecordRequest) (*Record, *http.Respo
 	return &body.Data.AddedRecord, res, nil
 }
 
-func (a *RecordsAPIService) DeleteRecord(r *Record) (*http.Response, error) {
-	q := url.Values{}
-	q.Set("domain", r.Name)
-	q.Set("type", r.Type)
-
-	switch r.Type {
-	case "A":
-		q.Set("ipAddress", *r.RData.IPAddress)
-	case "AAAA":
-		q.Set("ipAddress", *r.RData.IPAddress)
-	case "CNAME":
-		q.Set("cname", *r.RData.CNAME)
-	case "TXT":
-		q.Set("text", *r.RData.Text)
-	}
-
+func (a *RecordsAPIService) DeleteRecord(r *RecordRequest) (*http.Response, error) {
 	url := a.client.cfg.BaseURL + `/api/zones/records/delete`
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("new DeleteRecord request: %w", err)
 	}
 
+	q := structToQuery(r)
 	req.URL.RawQuery = q.Encode()
 
 	res, err := a.client.callAPI(req)
@@ -181,7 +167,7 @@ func (a *RecordsAPIService) DeleteRecord(r *Record) (*http.Response, error) {
 	}
 	defer res.Body.Close()
 
-	var body APIResponse[interface{}]
+	var body APIResponse[any]
 	err = json.NewDecoder(res.Body).Decode(&body)
 	if err != nil {
 		return nil, fmt.Errorf("decode DeleteRecord response: %w", err)

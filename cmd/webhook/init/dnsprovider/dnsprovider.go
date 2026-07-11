@@ -16,12 +16,12 @@ import (
 
 func Init(config configuration.Config) (provider.Provider, error) {
 	var domainFilter endpoint.DomainFilter
-	createMsg := "Creating TechnitiumDNS provider with "
+	var filters []string
 
 	if config.RegexDomainFilter != "" {
-		createMsg += fmt.Sprintf("Regexp domain filter: '%s', ", config.RegexDomainFilter)
+		filters = append(filters, fmt.Sprintf("regexp domain filter: '%s'", config.RegexDomainFilter))
 		if config.RegexDomainExclusion != "" {
-			createMsg += fmt.Sprintf("with exclusion: '%s', ", config.RegexDomainExclusion)
+			filters = append(filters, fmt.Sprintf("regexp exclusion: '%s'", config.RegexDomainExclusion))
 		}
 		domainFilter = endpoint.NewRegexDomainFilter(
 			regexp.MustCompile(config.RegexDomainFilter),
@@ -29,23 +29,24 @@ func Init(config configuration.Config) (provider.Provider, error) {
 		)
 	} else {
 		if len(config.DomainFilter) > 0 {
-			createMsg += fmt.Sprintf("zoneNode filter: '%s', ", strings.Join(config.DomainFilter, ","))
+			filters = append(filters, fmt.Sprintf("domain filter: '%s'", strings.Join(config.DomainFilter, ",")))
 		}
 		if len(config.ExcludeDomains) > 0 {
-			createMsg += fmt.Sprintf("Exclude domain filter: '%s', ", strings.Join(config.ExcludeDomains, ","))
+			filters = append(filters, fmt.Sprintf("exclude domain filter: '%s'", strings.Join(config.ExcludeDomains, ",")))
 		}
 		domainFilter = endpoint.NewDomainFilterWithExclusions(config.DomainFilter, config.ExcludeDomains)
 	}
 
-	createMsg = strings.TrimSuffix(createMsg, ", ")
-	if strings.HasSuffix(createMsg, "with ") {
-		createMsg += "no kind of domain filters"
+	if len(filters) == 0 {
+		log.Info("creating TechnitiumDNS provider with no domain filters")
+	} else {
+		log.Infof("creating TechnitiumDNS provider with %s", strings.Join(filters, ", "))
 	}
-	log.Info(createMsg)
 
 	technitiumConfig := technitium.Configuration{}
 	if err := env.Parse(&technitiumConfig); err != nil {
-		return nil, fmt.Errorf("reading technitiumConfig failed: %v", err)
+		return nil, fmt.Errorf("reading technitium configuration failed: %w", err)
 	}
+
 	return technitium.NewProvider(domainFilter, &technitiumConfig), nil
 }
